@@ -12,7 +12,7 @@
   A full-stack clinic platform with AI-powered symptom triage, automated medication reminders,<br/>
   and real-time Google Calendar sync. Three portals: <strong>Patient · Doctor · Admin</strong>
 </p>
-
+ <a href="#-https://healthcareapp-1-g5o7.onrender.com">Live App</a>.
 <p align="center">
   <a href="#-quickstart">Quickstart</a> ·
   <a href="#-api-endpoints">API Docs</a> ·
