@@ -353,7 +353,7 @@ Prescriptions (structured): {prescriptions}
 
 ## 🚀 Deployment
 
-### Backend — Render / Railway / Fly.io
+### Backend — Render
 
 ```bash
 # Start command:
@@ -361,13 +361,14 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 # Pre-deploy / release command:
 alembic upgrade head
+Backend-https://healthcareapp-uc7p.onrender.com
 ```
 
-### Frontend — Vercel
+### Frontend — Render
 
 ```bash
 # Set environment variable in Vercel dashboard:
-NEXT_PUBLIC_API_BASE_URL=https://your-backend.onrender.com
+NEXT_PUBLIC_API_BASE_URL=https://healthcareapp-1-g5o7.onrender.com
 ```
 
 ### Checklist before going live
