@@ -46,6 +46,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://healthcareapp-1-g5o7.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
