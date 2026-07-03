@@ -1,25 +1,198 @@
-# System Design Write-up
+# System Design — Healthcare Appointment & Follow-up Manager
 
-## Double-Booking Prevention
+> 800-word write-up covering double-booking prevention, slot hold mechanism, doctor leave conflict handling, and notification failure handling.
 
-The core risk in any slot-booking system is two patients successfully reserving the same doctor slot under concurrent requests. A naive approach — query for existing bookings, then insert if none exist — has a race window: two requests can both pass the check before either commits its insert.
+---
 
-This system closes that window with a **partial unique index** at the database level: `CREATE UNIQUE INDEX uq_doctor_slot_active ON appointments (doctor_id, slot_start) WHERE status IN ('held', 'confirmed')`. Postgres enforces this constraint atomically as part of each transaction's commit, independent of application-level timing. The booking flow (`slot_service.hold_slot`) doesn't trust that a slot is free just because `get_available_slots` said so a moment earlier; it attempts the insert directly and catches the resulting `IntegrityError` if a conflicting row already exists, returning a 409 Conflict to the losing request. The partial `WHERE` clause is what allows a cancelled or completed appointment to free up the slot for rebooking, since cancelled rows fall outside the indexed set.
+## Table of Contents
 
-## Slot Hold Mechanism
+1. [Double-Booking Prevention](#1-double-booking-prevention)
+2. [Slot Hold Mechanism](#2-slot-hold-mechanism)
+3. [Doctor Leave Conflict Handling](#3-doctor-leave-conflict-handling)
+4. [Notification Failure Handling](#4-notification-failure-handling)
+5. [Trade-offs & Future Hardening](#5-trade-offs--future-hardening)
 
-The brief requires a flow where a patient fills a symptom form before a booking is finalized — but if every patient could see and click into the same "available" slot while another patient fills that form, the data race shows up in the UI, not just the database. The booking flow is therefore split into two steps: `POST /appointments/hold` reserves the slot immediately with status `HELD` and a `hold_expires_at` timestamp (`SLOT_HOLD_EXPIRY_SECONDS`, default 120s), removing it from any other patient's available-slots query. `POST /appointments/confirm` then accepts the symptom text, runs the LLM triage, and promotes the row to `CONFIRMED`. If a patient abandons the form, the hold expires; a background job (`release_expired_holds`, run every minute) deletes expired `HELD` rows so the slot becomes bookable again. This means the unique index's "active" window is exactly `HELD ∪ CONFIRMED`, and the hold itself participates in the same database-level guarantee described above — a held slot is just as protected from double-booking as a confirmed one.
+---
 
-## Doctor Leave Conflict Handling
+## 1. Double-Booking Prevention
 
-When an admin marks a doctor on leave for a date range, the brief requires that affected patients be notified. `leave_service.create_leave_and_resolve_conflicts` does this as a single server-side operation: it creates the `Leave` row, then queries every `HELD`/`CONFIRMED` appointment whose `slot_start` falls within the range, and for each one calls `appointment_service.cancel_appointment` with status `CANCELLED_BY_LEAVE`. That function deletes the corresponding Google Calendar events (best-effort, see below), cancels any already-scheduled medication reminders, and sends a patient-facing rescheduling email — all logged through the same notification pipeline as ordinary cancellations. The admin/doctor UI surfaces a count of affected appointments so leave creation is never a silent, surprising action.
+The core risk in any slot-booking system is two patients successfully reserving the same doctor slot under concurrent requests. A naive approach — query for existing bookings, then insert if none exist — has a **race window**: both requests can pass the check before either commits its insert.
 
-## Notification Failure Handling
+```
+❌ NAIVE (UNSAFE) — race condition possible
+─────────────────────────────────────────────
+  Request A           Request B
+  ──────────          ──────────
+  SELECT slot...      SELECT slot...
+    → slot free ✓       → slot free ✓   ← both pass at same time
+  INSERT booking      INSERT booking
+    → success ✓         → success ✓     ← DOUBLE BOOKING 💥
+```
 
-Email delivery is treated as inherently unreliable. Every send first writes a `NotificationLog` row with status `PENDING` before attempting SMTP delivery; on success the row flips to `SENT`, on failure it becomes `FAILED` with the error captured in `last_error`. A background job (`retry_failed_notifications`, on the same interval as medication reminders, default every 5 minutes) re-attempts `FAILED` rows up to `EMAIL_MAX_RETRIES` times, after which the row is marked `EXHAUSTED` and becomes visible for manual follow-up. This means a transient SMTP outage during a booking confirmation cannot silently vanish — the system either delivers it shortly after recovery or surfaces the failure for review, rather than dropping it on a single failed attempt inside the request/response cycle.
+This system closes that window with a **partial unique index** enforced entirely at the database level:
 
-Google Calendar sync follows the same philosophy but with a lighter touch: each `CalendarEvent` row records whether the create/update/delete call succeeded via a `sync_failed` flag, and stores the user's own OAuth tokens. If a user has never connected their calendar, or the API call fails, the appointment and email flows are not blocked — calendar sync degrades gracefully rather than becoming a hard dependency of booking. The same graceful-degradation principle applies to the LLM integration: pre- and post-visit summaries are wrapped in retry-with-backoff, and on exhaustion the system stores a clearly-flagged fallback message (`ai_pre_visit_failed` / `ai_post_visit_failed`) instead of raising an error that would block the booking or visit-completion flow.
+```sql
+CREATE UNIQUE INDEX uq_doctor_slot_active
+ON appointments (doctor_id, slot_start)
+WHERE status IN ('held', 'confirmed');
+```
 
-## Trade-offs and Future Hardening
+```
+✅ THIS SYSTEM — DB constraint kills the race
+─────────────────────────────────────────────
+  Request A           Request B
+  ──────────          ──────────
+  INSERT (held)       INSERT (held)
+    → committed ✓       → IntegrityError 💥
+                          → 409 Conflict
+                          → "Slot just taken,
+                             choose another"
+```
 
-The in-process APScheduler is sufficient for a single backend instance but would duplicate job execution across multiple instances in a horizontally-scaled deployment; a production hardening pass would move medication reminders, hold expiry, and notification retries to a dedicated worker queue, such as Celery with Redis, with proper job locking. Google OAuth tokens are currently stored in plaintext, which should be encrypted at rest before handling real patient data in production.
+PostgreSQL enforces this atomically per transaction — no application-level timing can create a gap. The booking service (`slot_service.hold_slot`) **does not trust** that a slot is free because `get_available_slots` said so a moment earlier; it attempts the insert directly and catches `IntegrityError`. The partial `WHERE` clause is what allows cancelled/completed appointments to free up the slot for rebooking — those rows fall outside the indexed set.
+
+---
+
+## 2. Slot Hold Mechanism
+
+The booking flow requires patients to fill a symptom form before a booking is finalised. If every patient could see and click the same slot while another patient fills the form, the data race surfaces in the UI even though the DB constraint would catch it. The solution is a **two-step flow**:
+
+```
+Patient books a slot
+        │
+        ▼
+┌───────────────────┐
+│  POST /hold       │  ← Slot status = HELD
+│                   │     hold_expires_at = now + 120s
+│  DB unique index  │     Slot disappears from other
+│  fires here ──────┼──►  patients' available list
+└───────────────────┘
+        │
+        │  Patient fills symptom form (up to 120 seconds)
+        │
+        ▼
+┌───────────────────────────┐
+│  POST /confirm            │  ← Gemini generates pre-visit summary
+│                           │     Status → CONFIRMED
+│  Calendar events created  │     Email sent to patient + doctor
+│  for patient + doctor ────┼──►  hold_expires_at = null
+└───────────────────────────┘
+
+If patient abandons the form:
+        │
+        ▼
+┌───────────────────────────┐
+│  Background job           │  ← Runs every 60 seconds
+│  release_expired_holds()  │     Deletes HELD rows past expiry
+│                           │     Slot becomes bookable again
+└───────────────────────────┘
+```
+
+The hold itself participates in the same DB-level guarantee — a `HELD` slot is just as protected from double-booking as a `CONFIRMED` one.
+
+---
+
+## 3. Doctor Leave Conflict Handling
+
+When an admin marks a doctor on leave, all existing bookings in that date range must be cancelled and patients notified. This is handled atomically by `leave_service.create_leave_and_resolve_conflicts`:
+
+```
+Admin creates leave (start_date → end_date)
+              │
+              ▼
+     ┌─────────────────┐
+     │  Insert Leave   │
+     │  row into DB    │
+     └────────┬────────┘
+              │
+              ▼
+  Query all HELD / CONFIRMED
+  appointments in date range
+              │
+              ├──► For each affected appointment:
+              │
+              │    ┌──────────────────────────────────┐
+              │    │  1. Status → CANCELLED_BY_LEAVE  │
+              │    │  2. Delete Google Calendar events│
+              │    │     (patient + doctor calendars) │
+              │    │  3. Cancel pending reminders     │
+              │    │  4. Send patient email:          │
+              │    │     "Your appointment needs      │
+              │    │      rescheduling due to leave"  │
+              │    └──────────────────────────────────┘
+              │
+              ▼
+     Return count of affected
+     appointments to admin UI
+     → "3 appointments cancelled,
+        patients notified"
+```
+
+No appointment is silently dropped — every cancellation goes through the same notification pipeline as a regular cancellation, with the same email logging and retry guarantees.
+
+---
+
+## 4. Notification Failure Handling
+
+Email delivery is treated as **inherently unreliable**. A single SMTP call inside the request/response cycle that fails would silently drop a booking confirmation. The solution is a **log-before-send + background retry** pipeline:
+
+```
+Booking confirmed
+      │
+      ▼
+┌─────────────────────────────────┐
+│  Write NotificationLog row      │
+│  status = PENDING               │  ← This happens FIRST
+│  (even if SMTP fails, row exists│
+│   and can be retried later)     │
+└──────────────┬──────────────────┘
+               │
+               ▼
+        Attempt SMTP send
+               │
+       ┌───────┴────────┐
+       │                │
+    Success           Failure
+       │                │
+       ▼                ▼
+  status = SENT    status = FAILED
+                   last_error = "..."
+                        │
+                        ▼
+          ┌─────────────────────────┐
+          │  Background job runs    │
+          │  every 5 minutes        │
+          │  retry_failed_          │
+          │  notifications()        │
+          │                         │
+          │  retry_count < MAX  ────┼──► Re-attempt SMTP
+          │  retry_count >= MAX ────┼──► status = EXHAUSTED
+          │                         │    (visible to admin)
+          └─────────────────────────┘
+```
+
+The same pattern applies to **Google Calendar sync** — each `CalendarEvent` row records whether the create/update/delete API call succeeded (`sync_failed` flag). If a user hasn't linked their calendar or the API call fails, the **appointment and email flows are never blocked** — calendar sync degrades gracefully.
+
+The same **graceful degradation** applies to the LLM: if Gemini fails after all retries, a safe fallback message is stored and `ai_pre_visit_failed = 1` is set. The booking flow completes normally.
+
+```
+Notification reliability summary:
+─────────────────────────────────
+  SMTP fails once    → retry up to EMAIL_MAX_RETRIES times
+  SMTP exhausted     → EXHAUSTED status, admin can see it
+  Calendar fails     → sync_failed flag set, booking unaffected
+  Gemini fails       → fallback text stored, ai_*_failed = 1
+  Any of the above   → app never crashes, user never blocked
+```
+
+---
+
+## 5. Trade-offs & Future Hardening
+
+| Area | Current | Production Hardening |
+|---|---|---|
+| **Background jobs** | APScheduler in-process | Move to Celery + Redis for multi-instance deployments to avoid duplicate job execution |
+| **OAuth tokens** | Stored in plaintext | Encrypt at rest with pgcrypto or application-level Fernet key |
+| **Calendar sync** | Best-effort, fire-and-forget | Add a retry queue for failed calendar syncs (same pattern as email) |
+| **Scheduler** | Single interval for all jobs | Separate intervals per job type (holds: 60s, reminders: 5min, retries: 10min) |
+| **Test coverage** | None included | Add pytest suite for `slot_service.py` concurrency logic as highest priority |
