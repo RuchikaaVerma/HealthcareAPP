@@ -19,8 +19,8 @@
   <a href="#-database-schema">DB Schema</a> ·
   <a href="#-llm-prompts">LLM Prompts</a> ·
   <a href="#-google-calendar-setup">Calendar Setup</a> ·
-  <a href="#-deployment">Deployment</a>
-  <a href="https://drive.google.com/file/d/1HFI7YUNRZw-c5KyrPShjyLVXtf9tGd6K/view?usp=sharing-deployment">ZIP</a>
+  <a href="#-deployment">Deployment</a>.
+  <a href="https://drive.google.com/file/d/1HFI7YUNRZw-c5KyrPShjyLVXtf9tGd6K/view?usp=sharing-deployment">ZIP</a>.
   <a href="https://drive.google.com/file/d/1X2kukzUVyRnzcTOpGI1_yHAYQvsoF4Y7/view?usp=sharing-deployment">Demo</a>
   
 </p>
