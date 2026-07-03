@@ -1,201 +1,399 @@
-# Healthcare Appointment & Follow-up Manager
+<p align="center">
+  <img src="https://img.shields.io/badge/FastAPI-0B1220?style=for-the-badge&logo=fastapi&logoColor=13B8A6" />
+  <img src="https://img.shields.io/badge/Next.js_14-0B1220?style=for-the-badge&logo=next.js&logoColor=white" />
+  <img src="https://img.shields.io/badge/PostgreSQL-0B1220?style=for-the-badge&logo=postgresql&logoColor=7C9CFF" />
+  <img src="https://img.shields.io/badge/Google_Gemini-0B1220?style=for-the-badge&logo=google&logoColor=FF6B6B" />
+  <img src="https://img.shields.io/badge/React_Three_Fiber-0B1220?style=for-the-badge&logo=three.js&logoColor=white" />
+</p>
 
-A full-stack healthcare appointment platform with separate patient, doctor, and admin experiences. Patients search doctors, book slots, and submit symptoms before a visit; an LLM (Google Gemini) generates a triage summary for the doctor. After the visit, the doctor's notes and prescription are converted into a patient-friendly summary, medication reminders are scheduled automatically, and both sides stay in sync via email and Google Calendar.
+<h1 align="center">⚕ MediBridge — Healthcare Appointment & Follow-up Manager</h1>
 
-## Stack
+<p align="center">
+  A full-stack clinic platform with AI-powered symptom triage, automated medication reminders,<br/>
+  and real-time Google Calendar sync. Three portals: <strong>Patient · Doctor · Admin</strong>
+</p>
 
-- **Backend**: FastAPI (Python 3.12), PostgreSQL, SQLAlchemy, Alembic
-- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, React Three Fiber (3D), Framer Motion
-- **LLM**: Google Gemini (`gemini-1.5-flash` by default)
-- **Email**: SMTP via `fastapi-mail` (works with SendGrid, Mailgun SMTP relay, Gmail SMTP, etc.)
-- **Calendar**: Google Calendar API with OAuth 2.0
-- **Background jobs**: APScheduler (in-process, async)
+<p align="center">
+  <a href="#-quickstart">Quickstart</a> ·
+  <a href="#-api-endpoints">API Docs</a> ·
+  <a href="#-database-schema">DB Schema</a> ·
+  <a href="#-llm-prompts">LLM Prompts</a> ·
+  <a href="#-google-calendar-setup">Calendar Setup</a> ·
+  <a href="#-deployment">Deployment</a>
+</p>
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **Backend** | FastAPI (Python 3.12), SQLAlchemy, Alembic, APScheduler |
+| **Frontend** | Next.js 14 (App Router), TypeScript, Tailwind CSS, React Three Fiber, Framer Motion |
+| **Database** | PostgreSQL 14+ with partial unique index for concurrency safety |
+| **LLM** | Google Gemini `gemini-1.5-flash` with retry + graceful fallback |
+| **Email** | SMTP via `fastapi-mail` — works with Gmail, SendGrid, Mailgun |
+| **Calendar** | Google Calendar API with OAuth 2.0 per-user token storage |
+| **Auth** | JWT (HS256) with access + refresh token rotation |
+
+---
 
 ## Project Structure
 
 ```
-healthcare-app/
+healthcare-appointment-manager/
+├── README.md
+├── SYSTEM_DESIGN.md
+│
 ├── backend/
 │   ├── app/
-│   │   ├── core/          # config, database, security, auth dependencies
-│   │   ├── models/        # SQLAlchemy ORM models
-│   │   ├── schemas/       # Pydantic request/response schemas
-│   │   ├── routers/       # API route handlers
-│   │   ├── services/      # business logic (booking, LLM, email, calendar, leave, reminders, scheduler)
-│   │   ├── main.py        # FastAPI app entrypoint
-│   │   └── seed.py        # creates the initial admin account
-│   ├── alembic/            # database migrations (includes the double-booking-prevention index)
+│   │   ├── core/            # config · database · security · auth deps
+│   │   ├── models/          # SQLAlchemy ORM (9 tables)
+│   │   ├── schemas/         # Pydantic request/response schemas
+│   │   ├── routers/         # auth · admin · doctors · appointments · calendar
+│   │   ├── services/        # slot · llm · email · calendar · leave · reminder · scheduler
+│   │   ├── main.py          # FastAPI app entrypoint
+│   │   └── seed.py          # creates the initial admin account
+│   ├── alembic/
+│   │   └── versions/
+│   │       └── 0001_initial.py   # full schema + double-booking partial index
 │   ├── requirements.txt
 │   └── .env.example
+│
 └── frontend/
     ├── src/
-    │   ├── app/            # Next.js App Router pages (login, register, patient, doctor)
-    │   ├── components/     # shared UI, including the 3D vitals-orb hero scene
-    │   └── lib/             # API client (with auto token refresh) and auth state
+    │   ├── app/             # pages: login · register · patient · doctor
+    │   ├── components/
+    │   │   ├── 3d/          # VitalsOrb · OrbScene · ParticleField (React Three Fiber)
+    │   │   └── ui/          # Button · GlassCard · FormFields · UrgencyBadge
+    │   └── lib/             # api.ts (axios + JWT refresh) · authStore.ts (zustand)
     ├── package.json
     └── .env.example
 ```
 
-## Setup Guide
+---
 
-### Prerequisites
+## ⚡ Quickstart
 
-- Python 3.12+
-- Node.js 18+
-- PostgreSQL 14+ (a free instance from Neon, Render, Railway, or Supabase works fine)
-- A Google Cloud project with the Calendar API enabled and OAuth 2.0 credentials
-- A Google Gemini API key (from Google AI Studio)
-- An SMTP provider (SendGrid, Mailgun, or even a Gmail App Password for testing)
+> **Windows users:** replace `source venv/bin/activate` with `venv\Scripts\activate`
 
-### 1. Backend
+### 1 · Backend
 
 ```bash
-cd backend
+cd healthcare-appointment-manager/backend
+
+# Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # Mac/Linux
+
+# Install dependencies
 pip install -r requirements.txt
 
-cp .env.example .env
-# Edit .env: set DATABASE_URL, GEMINI_API_KEY, MAIL_* vars, GOOGLE_CLIENT_ID/SECRET, SECRET_KEY
+# Configure environment
+copy .env.example .env         # Windows
+# cp .env.example .env         # Mac/Linux
 
-# Apply the database schema (includes the partial unique index that prevents double-booking)
+# Edit .env — minimum required:
+# DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+# SECRET_KEY=any_long_random_string
+```
+
+### 2 · Run Database Migrations
+
+```bash
 alembic upgrade head
+```
 
-# Create the initial admin account
-SEED_ADMIN_EMAIL=admin@yourclinic.com SEED_ADMIN_PASSWORD=ChooseAStrongPassword python -m app.seed
+> Creates all 9 tables including the `uq_doctor_slot_active` partial unique index that prevents double-booking at the database level.
 
-# Run the API
+### 3 · Seed Admin Account
+
+```bash
+# Windows CMD:
+set SEED_ADMIN_EMAIL=admin@clinic.com
+set SEED_ADMIN_PASSWORD=ChooseStrongPassword
+python -m app.seed
+
+# Default credentials if env vars not set:
+# Email:    admin@clinic.com
+# Password: ChangeMe123!
+```
+
+### 4 · Start the API
+
+```bash
 uvicorn app.main:app --reload
 ```
 
-The API is now at `http://localhost:8000`. Interactive docs are at `http://localhost:8000/docs`.
+→ API running at `http://localhost:8000`  
+→ Interactive Swagger docs at `http://localhost:8000/docs`
 
-### 2. Frontend
+### 5 · Frontend
 
 ```bash
-cd frontend
+cd ../frontend
 npm install
-cp .env.example .env.local
-# Edit .env.local: set NEXT_PUBLIC_API_BASE_URL to your backend URL
-
+copy .env.example .env.local   # Windows
 npm run dev
 ```
 
-The app is now at `http://localhost:3000`.
+→ App running at `http://localhost:3000`
 
-### 3. Google Calendar Setup
+> **Minimum to get running:** Only `DATABASE_URL` and `SECRET_KEY` are strictly required.
+> Without Gemini/SMTP/Google keys — AI summaries show a graceful fallback, emails log to DB without sending, calendar sync is silently skipped. The app is fully usable.
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project (or use an existing one) and enable the **Google Calendar API**.
-2. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**, application type **Web application**.
-3. Add an authorized redirect URI matching your backend's `GOOGLE_REDIRECT_URI` (e.g. `http://localhost:8000/api/calendar/oauth/callback` for local dev, or your deployed backend URL in production).
-4. Copy the generated **Client ID** and **Client Secret** into the backend `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-5. While your app is in "Testing" publishing status, add the Google accounts you'll use for testing as **Test users** under the OAuth consent screen, or publish the app for general use.
-6. In the frontend, a user (patient or doctor) connects their calendar by hitting `GET /api/calendar/oauth/start` (wire this to a "Connect Google Calendar" button), which redirects to Google's consent screen and back.
+---
 
-### 4. Gemini API Key
+## ⚙ Environment Variables
 
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key.
-2. Set it as `GEMINI_API_KEY` in the backend `.env`.
-3. If the key is missing or Gemini is unreachable, the system does **not** break — pre-visit and post-visit summaries gracefully fall back to a safe default message, and the relevant `ai_*_failed` flag is set so the UI can show "AI summary unavailable."
+### Backend (`backend/.env`)
 
-### 5. Email (SMTP)
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ Required | Postgres connection string. Use `postgresql://` prefix. Add `?sslmode=require` for Neon/cloud. |
+| `SECRET_KEY` | ✅ Required | Random string (32+ chars) used to sign JWTs. Never commit this. |
+| `GEMINI_API_KEY` | Optional | From [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey). Without it, AI summaries show a fallback. |
+| `GEMINI_MODEL` | Optional | Default: `gemini-1.5-flash` |
+| `MAIL_USERNAME` | Optional | Your Gmail address or SMTP username |
+| `MAIL_PASSWORD` | Optional | Gmail App Password (16-char) or SMTP API key |
+| `MAIL_SERVER` | Optional | `smtp.gmail.com` for Gmail · `smtp.sendgrid.net` for SendGrid |
+| `MAIL_PORT` | Optional | `587` for STARTTLS (recommended) |
+| `GOOGLE_CLIENT_ID` | Optional | OAuth 2.0 client ID from Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | Optional | OAuth 2.0 client secret — keep private |
+| `GOOGLE_REDIRECT_URI` | Optional | Default: `http://localhost:8000/api/calendar/oauth/callback` |
+| `CORS_ORIGINS` | Optional | Default: `http://localhost:3000` |
+| `SLOT_HOLD_EXPIRY_SECONDS` | Optional | Default: `120` — how long a slot hold lasts before auto-release |
+| `SCHEDULER_INTERVAL_MINUTES` | Optional | Default: `5` — how often background jobs run |
 
-Works with any SMTP provider. Example for SendGrid:
+### Frontend (`frontend/.env.local`)
 
-```
-MAIL_USERNAME=apikey
-MAIL_PASSWORD=<your-sendgrid-api-key>
-MAIL_SERVER=smtp.sendgrid.net
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | ✅ Required | Backend URL. Default: `http://localhost:8000` |
+
+---
+
+## 🔑 Google Calendar Setup
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → create or select a project
+2. **APIs & Services → Enable APIs** → enable **Google Calendar API**
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+   - Application type: **Web application**
+4. Add authorized redirect URI:
+   ```
+   http://localhost:8000/api/calendar/oauth/callback
+   ```
+5. Copy **Client ID** and **Client Secret** into backend `.env`
+6. Under **OAuth consent screen → Test users** — add the Google accounts you'll use for testing
+7. Users connect their calendar in-app via the "Connect Google Calendar" button which calls `GET /api/calendar/oauth/start`
+
+> **How it works:** User consents → Google redirects to `/oauth/callback` → tokens stored per user in `google_oauth_tokens` table → events created/updated/deleted automatically on every booking action.
+
+---
+
+## 📧 Email Setup (Gmail SMTP)
+
+1. Enable 2-Step Verification on your Google account
+2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+3. Create an App Password — you get a 16-character code
+4. Set in `.env`:
+
+```env
+MAIL_USERNAME=youraddress@gmail.com
+MAIL_PASSWORD=abcdefghijklmnop    # 16-char app password, no spaces
+MAIL_FROM=youraddress@gmail.com
+MAIL_SERVER=smtp.gmail.com
 MAIL_PORT=587
+MAIL_STARTTLS=true
+MAIL_SSL_TLS=false
 ```
 
-Failed sends are logged to the `notification_logs` table and automatically retried by the background scheduler (up to `EMAIL_MAX_RETRIES` times), so a transient outage never silently drops a booking confirmation.
+> Failed emails are logged to `notification_logs` and automatically retried up to `EMAIL_MAX_RETRIES` times by the background scheduler — no silent drops.
 
-## Deployment
+---
 
-- **Backend**: deploy as a standard ASGI app on Render, Railway, or Fly.io (`uvicorn app.main:app --host 0.0.0.0 --port $PORT`). Run `alembic upgrade head` as a release/pre-deploy step. Provision a managed Postgres instance (Render, Neon, Railway all offer free tiers).
-- **Frontend**: deploy on Vercel (zero-config for Next.js) or Render. Set `NEXT_PUBLIC_API_BASE_URL` to your deployed backend's public URL.
-- **CORS**: update `CORS_ORIGINS` in the backend `.env` to include your deployed frontend's URL.
-- **Google OAuth redirect URI**: update both the Google Cloud Console credential and `GOOGLE_REDIRECT_URI` in `.env` to your deployed backend's callback URL once live.
+## 📡 API Endpoints
 
-## API Documentation
+> Full interactive docs at `http://localhost:8000/docs` once the backend is running.
 
-Full interactive API docs (OpenAPI/Swagger) are auto-generated and served at `/docs` once the backend is running. Below is a summary of the key endpoints.
+### Auth — `/api/auth`
 
-### Auth (`/api/auth`)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/register` | Patient self-registration (admins cannot self-register) |
-| POST | `/login` | Returns access + refresh JWT tokens |
-| POST | `/refresh` | Exchanges a refresh token for a new access token |
-| GET | `/me` | Returns the current authenticated user |
+| `POST` | `/api/auth/register` | Patient self-registration. Returns access + refresh tokens. |
+| `POST` | `/api/auth/login` | Login for any role. Returns JWT tokens. |
+| `POST` | `/api/auth/refresh` | Exchange refresh token for a new access token. |
+| `GET` | `/api/auth/me` | Returns the currently authenticated user's profile. |
 
-### Admin (`/api/admin`) — admin role required
+### Admin — `/api/admin` _(admin role required)_
+
 | Method | Path | Description |
 |---|---|---|
-| POST | `/doctors` | Create a doctor account + profile + working hours |
-| GET | `/doctors` | List all doctors |
-| PATCH | `/doctors/{id}` | Update a doctor's profile |
-| POST | `/doctors/{id}/leave` | Mark a doctor on leave; auto-cancels and notifies affected patients |
+| `POST` | `/api/admin/doctors` | Create a doctor account + profile + working hours in one call. |
+| `GET` | `/api/admin/doctors` | List all doctors with profiles and schedules. |
+| `PATCH` | `/api/admin/doctors/{id}` | Update a doctor's specialisation, bio, or slot duration. |
+| `POST` | `/api/admin/doctors/{id}/leave` | Mark doctor on leave — auto-cancels affected bookings and emails patients. |
 
-### Doctors (`/api/doctors`) — public/patient-facing
+### Doctors — `/api/doctors` _(public)_
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/` | Search doctors, optionally by specialisation |
-| GET | `/{id}/slots?date=YYYY-MM-DD` | Get available slots for a doctor on a given day |
+| `GET` | `/api/doctors` | Search doctors. Filter by `?specialisation=cardiology` |
+| `GET` | `/api/doctors/{id}/slots?date=YYYY-MM-DD` | Returns available un-held, un-confirmed slots for a day. |
 
-### Appointments (`/api/appointments`)
+### Appointments — `/api/appointments`
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/appointments/hold` | Patient | Step 1: Reserve slot (HELD status + 120s expiry timer). |
+| `POST` | `/api/appointments/confirm` | Patient | Step 2: Submit symptoms → Gemini triage → CONFIRMED → email + calendar. |
+| `GET` | `/api/appointments/me` | Any | List current user's appointments. |
+| `GET` | `/api/appointments/{id}` | Any | Get single appointment (role-checked). |
+| `POST` | `/api/appointments/{id}/cancel` | Any | Cancel → delete calendar events → cancel reminders → send email. |
+| `POST` | `/api/appointments/post-visit` | Doctor | Submit notes + Rx → Gemini patient summary → schedule medication reminders. |
+
+### Calendar — `/api/calendar`
+
 | Method | Path | Description |
 |---|---|---|
-| POST | `/hold` | Patient reserves a slot (HELD status, the "slot hold" mechanism) |
-| POST | `/confirm` | Patient submits symptoms; LLM generates pre-visit summary; booking is confirmed; email + calendar sync fires |
-| GET | `/me` | List the current user's appointments (patient or doctor) |
-| GET | `/{id}` | Get a single appointment (role-checked) |
-| POST | `/{id}/cancel` | Cancel an appointment |
-| POST | `/post-visit` | Doctor submits notes + prescription; LLM generates patient-friendly summary; medication reminders are scheduled |
+| `GET` | `/api/calendar/oauth/start` | Returns Google consent URL. Redirect the user's browser here. |
+| `GET` | `/api/calendar/oauth/callback` | Google redirects here. Stores tokens, redirects browser back to frontend. |
+| `GET` | `/api/calendar/status` | Whether the current user has linked their Google Calendar. |
 
-### Calendar (`/api/calendar`)
-| Method | Path | Description |
-|---|---|---|
-| GET | `/oauth/start` | Returns the Google consent URL for the current user |
-| GET | `/oauth/callback` | OAuth redirect target; stores tokens |
-| GET | `/status` | Whether the current user has linked their calendar |
+---
 
-## Database Schema
+## 🗄 Database Schema
 
-See `backend/alembic/versions/0001_initial.py` for the full schema. Key tables:
+> Full migration: `backend/alembic/versions/0001_initial.py`
 
-- **users** — shared auth table for admin/doctor/patient, with role column
-- **doctors** / **working_hours** — doctor profile and weekly availability template
-- **patients** — patient profile
-- **leaves** — doctor unavailability date ranges
-- **appointments** — the core transactional table; holds slot timing, status, AI pre/post-visit data, and prescription data. A partial unique index `uq_doctor_slot_active` on `(doctor_id, slot_start)` — scoped to `status IN ('held', 'confirmed')` — is what actually prevents double-booking at the database level (see the System Design doc for the full rationale).
-- **reminders** — individual scheduled medication reminder doses, expanded from a prescription
-- **calendar_events** — tracks the Google Calendar event ID created for each appointment, per owner (patient/doctor), so it can be updated or deleted correctly
-- **google_oauth_tokens** — stores each user's Google OAuth tokens
-- **notification_logs** — every outbound email is logged here before sending, enabling reliable retries
+```
+┌─────────────────────────────────────────────────────────────┐
+│  users                                                       │
+│  id (PK) · email (UNIQUE) · role (admin/doctor/patient)     │
+│  hashed_password · full_name · phone · is_active            │
+└──────────────┬──────────────────────┬───────────────────────┘
+               │                      │
+       ┌───────▼───────┐      ┌───────▼──────┐
+       │    doctors     │      │   patients   │
+       │  specialisation│      │  date_of_birth│
+       │  slot_duration │      │  blood_group  │
+       └──┬────────┬───┘      └──────┬────────┘
+          │        │                 │
+   ┌──────▼──┐ ┌───▼────┐    ┌──────▼──────────────────────────┐
+   │ working │ │ leaves │    │         appointments             │
+   │  _hours │ │        │    │  slot_start · slot_end · status  │
+   └─────────┘ └────────┘    │  symptoms · ai_urgency_level     │
+                              │  doctor_notes · prescription     │
+                              │  ★ UNIQUE INDEX (doctor_id,      │
+                              │    slot_start) WHERE status IN   │
+                              │    ('held','confirmed')          │
+                              └─────┬──────────────┬────────────┘
+                                    │              │
+                          ┌─────────▼──┐  ┌────────▼──────────┐
+                          │  reminders │  │ notification_logs  │
+                          │  drug_name │  │ type · status      │
+                          │  due_at    │  │ retry_count        │
+                          │  status    │  └────────────────────┘
+                          └────────────┘
+```
 
-## LLM Prompts
+| Table | Purpose |
+|---|---|
+| `users` | Shared auth for all roles — admin, doctor, patient |
+| `doctors` | Doctor profile: specialisation, bio, slot duration |
+| `working_hours` | Weekly availability template (day + start/end time) |
+| `patients` | Patient profile: DOB, blood group, emergency contact |
+| `leaves` | Doctor unavailability date ranges |
+| `appointments` | Core transaction table with full booking lifecycle |
+| `reminders` | Individual medication reminder doses (expanded from Rx) |
+| `calendar_events` | Google Calendar event IDs per appointment per user |
+| `google_oauth_tokens` | OAuth tokens per user for Calendar API |
+| `notification_logs` | Every outbound email logged before sending — enables retries |
 
-**Pre-visit summary** (triggered on booking confirmation):
-> "You are a clinical triage assistant... Analyse the symptoms below and respond with STRICT JSON: urgency_level (Low/Medium/High), chief_complaint, suggested_questions (3 questions). Symptoms: `<symptoms>`"
+> **The key constraint:** `uq_doctor_slot_active` is a **partial unique index** on `(doctor_id, slot_start)` scoped to `WHERE status IN ('held', 'confirmed')`. This prevents double-booking at the database level — no application-level race condition possible. Cancelled/completed rows fall outside the index so those slots are freely re-bookable.
 
-**Post-visit summary** (triggered when the doctor submits notes):
-> "You are a medical assistant converting clinical notes into a patient-friendly summary... Respond with STRICT JSON: summary, medication_schedule, follow_up_steps. Clinical notes: `<notes>` Prescriptions: `<prescriptions>`"
+---
 
-Full prompt templates are in `backend/app/services/llm_service.py`.
+## 🤖 LLM Prompts
 
-## Design Highlights
+### Pre-Visit Triage _(triggered on booking confirmation)_
 
-- **Double-booking prevention**: enforced at the database level via a Postgres partial unique index, not just application logic — see `SYSTEM_DESIGN.md` for the full writeup.
-- **Slot hold mechanism**: a slot is reserved as `HELD` while a patient fills the symptom form, with a short expiry (`SLOT_HOLD_EXPIRY_SECONDS`); abandoned holds are swept by the background scheduler every minute.
-- **Leave conflict handling**: marking a doctor on leave automatically cancels affected appointments and notifies patients in one atomic flow.
-- **Graceful LLM failure handling**: every LLM call is wrapped in retries with exponential backoff; on exhaustion, a safe fallback message is stored and a `*_failed` flag is set, so booking and visit-completion never break.
-- **Reliable notifications**: every email is logged before sending; failures are retried automatically by a background job rather than silently dropped.
-- **3D, animated UI**: a calm, clinical-but-distinctive visual identity (deep navy + teal palette, Space Grotesk/Inter typography) anchored by a React Three Fiber "vitals orb" hero scene.
+```
+You are a clinical triage assistant helping a doctor prepare for a patient visit.
+Analyse the symptoms below and respond with STRICT JSON only, no markdown, in exactly this shape:
+{
+  "urgency_level": "Low" | "Medium" | "High",
+  "chief_complaint": "<one sentence summary of the main problem>",
+  "suggested_questions": ["<question 1>", "<question 2>", "<question 3>"]
+}
 
-## Known Limitations / Next Steps
+Symptoms: {symptoms}
+```
 
-- The in-process APScheduler is appropriate for a single backend instance; a multi-instance production deployment should move background jobs to a dedicated worker (e.g. Celery + Redis) to avoid duplicate job execution.
-- OAuth tokens are stored in plaintext in `google_oauth_tokens`; production deployments should encrypt them at rest.
-- No automated test suite is included in this deliverable; given the scope, adding pytest coverage for the slot/booking concurrency logic would be the highest-value next addition.
+### Post-Visit Summary _(triggered when doctor submits notes)_
+
+```
+You are a medical assistant converting clinical notes into a patient-friendly summary.
+Respond with STRICT JSON only, no markdown, in exactly this shape:
+{
+  "summary": "<plain-language explanation of what was found, 3-5 sentences>",
+  "medication_schedule": "<plain-language dosage and timing for each medication>",
+  "follow_up_steps": "<what the patient should do next, when to return or seek urgent care>"
+}
+
+Clinical notes: {notes}
+Prescriptions (structured): {prescriptions}
+```
+
+> Full templates with retry logic in `backend/app/services/llm_service.py`
+>
+> **Failure handling:** Every call uses exponential-backoff retries (`LLM_MAX_RETRIES`). On exhaustion, a safe fallback message is stored and `ai_*_failed=1` is set. Booking and visit-completion flows are **never blocked** by an LLM error.
+
+---
+
+## 🚀 Deployment
+
+### Backend — Render / Railway / Fly.io
+
+```bash
+# Start command:
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+# Pre-deploy / release command:
+alembic upgrade head
+```
+
+### Frontend — Vercel
+
+```bash
+# Set environment variable in Vercel dashboard:
+NEXT_PUBLIC_API_BASE_URL=https://your-backend.onrender.com
+```
+
+### Checklist before going live
+
+- [ ] Update `CORS_ORIGINS` to your production frontend URL
+- [ ] Update `GOOGLE_REDIRECT_URI` and Google Cloud Console redirect URI to production backend URL
+- [ ] Set a strong `SECRET_KEY` — never use the default
+- [ ] Reset Neon/Postgres password if it was ever shared or exposed
+- [ ] Consider encrypting `google_oauth_tokens` at rest for HIPAA-adjacent compliance
+
+---
+
+## Known Limitations
+
+- **APScheduler** runs in-process — fine for a single instance. For horizontal scaling, move background jobs to Celery + Redis.
+- **OAuth tokens** are stored in plaintext — encrypt at rest before handling real patient data in production.
+- **No automated tests** included — highest-value addition would be pytest coverage for the slot concurrency logic in `services/slot_service.py`.
+
+---
+
+## Admin Credentials (default seed)
+
+```
+Email:    admin@clinic.com
+Password: ChangeMe123!
+```
+
+> Change these immediately after first login in any non-local environment.
