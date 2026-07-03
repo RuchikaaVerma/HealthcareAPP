@@ -65,7 +65,7 @@ alembic upgrade head
 SEED_ADMIN_EMAIL=admin@yourclinic.com SEED_ADMIN_PASSWORD=ChooseAStrongPassword python -m app.seed
 
 # Run the API
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 The API is now at `http://localhost:8000`. Interactive docs are at `http://localhost:8000/docs`.
@@ -108,6 +108,9 @@ MAIL_PASSWORD=<your-sendgrid-api-key>
 MAIL_SERVER=smtp.sendgrid.net
 MAIL_PORT=587
 ```
+## Admin Login
+Email: admin@clinic.com
+Password: ChangeMe123!
 
 Failed sends are logged to the `notification_logs` table and automatically retried by the background scheduler (up to `EMAIL_MAX_RETRIES` times), so a transient outage never silently drops a booking confirmation.
 
