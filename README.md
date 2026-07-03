@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/React_Three_Fiber-0B1220?style=for-the-badge&logo=three.js&logoColor=white" />
 </p>
 
-<h1 align="center">⚕ MediBridge — Healthcare Appointment & Follow-up Manager</h1>
+<h1 align="center">⚕ Vital — Healthcare Appointment & Follow-up Manager</h1>
 
 <p align="center">
   A full-stack clinic platform with AI-powered symptom triage, automated medication reminders,<br/>
